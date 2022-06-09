@@ -1,50 +1,31 @@
-import sha1 from 'sha1';
+import crypto from 'crypto';
 import Queue from 'bull';
-import { ObjectId } from 'mongodb';
 import dbClient from '../utils/db';
-import getIdAndKey from '../utils/users';
-
-const userQu = new Queue('userQ');
+import { checkAuth, findUserById } from '../utils/helpers';
 
 class UsersController {
-  static async postNew(req, res) {
-    const { email, password } = req.body;
+  static async postNew(request, response) {
+    const usQueue = new Queue('userQueue');
+    const { email, password } = request.body;
+    if (!email) return response.status(400).json({ error: 'Missing email' });
+    if (!password) return response.status(400).json({ error: 'Missing password' });
 
-    if (!email) return res.status(400).send({ error: 'Missing email' });
-    if (!password) return res.status(400).send({ error: 'Missing password' });
-    const emailExists = await dbClient.users.findOne({ email });
-    if (emailExists) return res.status(400).send({ error: 'Already exist' });
+    const userExistsArray = await dbClient.users.find({ email }).toArray();
+    if (userExistsArray.length > 0) return response.status(400).json({ error: 'Already exist' });
 
-    const secPass = sha1(password);
-
-    const insertStat = await dbClient.users.insertOne({
-      email,
-      password: secPass,
-    });
-
-    const createdUser = {
-      id: insertStat.insertedId,
-      email,
-    };
-
-    await userQu.add({
-      userId: insertStat.insertedId.toString(),
-    });
-
-    return res.status(201).send(createdUser);
+    const hashedPassword = crypto.createHash('SHA1').update(password).digest('hex');
+    const resultObj = await dbClient.users.insertOne({ email, password: hashedPassword });
+    const createdUser = { id: resultObj.ops[0]._id, email: resultObj.ops[0].email };
+    await usQueue.add({ userId: createdUser.id });
+    return response.status(201).json(createdUser);
   }
 
-  static async getMe(req, res) {
-    const { userId } = await getIdAndKey(req);
-
-    const user = await dbClient.users.findOne({ _id: ObjectId(userId) });
-    if (!user) return res.status(401).send({ error: 'Unauthorized' });
-
-    const userInfo = { id: user._id, ...user };
-    delete userInfo._id;
-    delete userInfo.password;
-
-    return res.status(200).send(userInfo);
+  static async getMe(request, response) {
+    const userId = await checkAuth(request);
+    if (!userId) return response.status(401).json({ error: 'Unauthorized' });
+    const user = await findUserById(userId);
+    if (!user) return response.status(401).json({ error: 'Unauthorized' });
+    return response.json({ id: user._id, email: user.email });
   }
 }
 

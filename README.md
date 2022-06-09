@@ -1,2 +1,1 @@
-HolbertonSchool projecto
-:)
+holbertonSchool project
